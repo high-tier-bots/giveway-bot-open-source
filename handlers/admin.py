@@ -4,6 +4,14 @@ from pyrogram.enums import ChatMemberStatus
 from config import Config
 from database.mongo import db
 from utils.logger import logger
+from handlers.botlog import (
+    send_admin_action_log,
+    send_force_channel_added_log,
+    send_force_channel_removed_log,
+    send_admin_added_log,
+    send_admin_removed_log,
+    send_broadcast_log
+)
 from datetime import datetime
 
 def is_admin(user_id: int) -> bool:
@@ -45,9 +53,52 @@ def setup_admin_handlers(app: Client):
             logger.error(f"Error in admin stats: {e}")
             await message.reply_text("❌ Error getting statistics")
     
-    @app.on_message(filters.command("broadcast") & admin_only & filters.private)
+    @app.on_message(filters.command("setbroadcast") & admin_only & filters.private)
+    async def set_broadcast_target_command(client, message: Message):
+        """Set broadcast target (users, channels, or both)"""
+        try:
+            if len(message.command) < 2:
+                settings = db.settings.find_one({"_id": "main"})
+                target = settings.get("broadcast_target", "both") if settings else "both"
+                await message.reply_text(
+                    f"ℹ️ **Current Broadcast Target:** {target}\n\n"
+                    "**Usage:**\n"
+                    "`/setbroadcast users` - Broadcast to users only\n"
+                    "`/setbroadcast channels` - Broadcast to channels only\n"
+                    "`/setbroadcast both` - Broadcast to users and channels"
+                )
+                return
+            
+            target = message.command[1].lower()
+            
+            if target not in ["users", "channels", "both"]:
+                await message.reply_text("❌ Invalid target! Use: users, channels, or both")
+                return
+            
+            db.settings.update_one(
+                {"_id": "main"},
+                {"$set": {"broadcast_target": target}},
+                upsert=True
+            )
+            
+            await message.reply_text(f"✅ Broadcast target set to: **{target}**")
+            
+            # Send log
+            await send_admin_action_log(
+                client,
+                message.from_user.id,
+                "Broadcast Target Updated",
+                f"Target set to: {target}"
+            )
+            logger.info(f"Admin {message.from_user.id} set broadcast target to {target}")
+            
+        except Exception as e:
+            logger.error(f"Error in set broadcast target: {e}")
+            await message.reply_text("❌ Error updating broadcast target")
+    
+    @app.on_message(filters.command("broadcast") & admin_only)
     async def broadcast_command(client, message: Message):
-        """Broadcast message to all users"""
+        """Broadcast message to users/channels - select target with buttons"""
         try:
             if len(message.command) < 2 and not message.reply_to_message:
                 await message.reply_text(
@@ -59,11 +110,86 @@ def setup_admin_handlers(app: Client):
             # Get broadcast message
             if message.reply_to_message:
                 broadcast_msg = message.reply_to_message
+                broadcast_text = None
+                message_id = broadcast_msg.id
             else:
                 broadcast_text = message.text.split(None, 1)[1]
                 broadcast_msg = None
+                message_id = None
             
-            # Confirm broadcast
+            # Select broadcast target
+            buttons = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("👤 Users Only", callback_data="broadcast_select_users"),
+                    InlineKeyboardButton("📺 Channels Only", callback_data="broadcast_select_channels")
+                ],
+                [
+                    InlineKeyboardButton("👥 Both", callback_data="broadcast_select_both")
+                ],
+                [
+                    InlineKeyboardButton("❌ Cancel", callback_data="broadcast_cancel")
+                ]
+            ])
+            
+            await message.reply_text(
+                "📢 **Select Broadcast Target:**\n\n"
+                "Choose where you want to send this message:",
+                reply_markup=buttons
+            )
+            
+            # Store broadcast data temporarily
+            db.broadcasts.insert_one({
+                "admin_id": message.from_user.id,
+                "message_id": message_id,
+                "text": broadcast_text,
+                "status": "pending",
+                "target": None,
+                "created_at": datetime.now()
+            })
+            
+        except Exception as e:
+            logger.error(f"Error in broadcast: {e}")
+            await message.reply_text("❌ Error preparing broadcast")
+    
+    @app.on_callback_query(filters.regex("^broadcast_select_"))
+    async def handle_broadcast_target_selection(client, callback_query):
+        """Handle broadcast target selection"""
+        try:
+            if not is_admin(callback_query.from_user.id):
+                await callback_query.answer("❌ You are not authorized!", show_alert=True)
+                return
+            
+            # Get the target from callback data
+            target = callback_query.data.replace("broadcast_select_", "")
+            
+            # Find the pending broadcast
+            broadcast = db.broadcasts.find_one({
+                "admin_id": callback_query.from_user.id,
+                "status": "pending"
+            })
+            
+            if not broadcast:
+                await callback_query.answer("❌ No pending broadcast found!", show_alert=True)
+                return
+            
+            # Update broadcast with target
+            db.broadcasts.update_one(
+                {"_id": broadcast["_id"]},
+                {"$set": {"target": target}}
+            )
+            
+            # Get counts for display
+            if target == "users":
+                count = db.users.count_documents({})
+                target_text = "👤 Users"
+            elif target == "channels":
+                count = db.chats.count_documents({})
+                target_text = "📺 Channels"
+            else:  # both
+                count = db.users.count_documents({}) + db.chats.count_documents({})
+                target_text = "👥 Users + Channels"
+            
+            # Show confirmation with selected target
             buttons = InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton("✅ Confirm", callback_data="broadcast_confirm"),
@@ -71,26 +197,20 @@ def setup_admin_handlers(app: Client):
                 ]
             ])
             
-            users_count = db.users.count_documents({})
-            await message.reply_text(
+            await callback_query.message.edit_text(
                 f"📢 **Broadcast Confirmation**\n\n"
-                f"👥 Users: {users_count:,}\n\n"
+                f"🎯 <b>Target:</b> {target_text}\n"
+                f"👥 <b>Recipients:</b> {count:,}\n\n"
                 f"Are you sure you want to send this broadcast?",
                 reply_markup=buttons
             )
             
-            # Store broadcast data temporarily
-            db.broadcasts.insert_one({
-                "admin_id": message.from_user.id,
-                "message_id": message.reply_to_message.id if message.reply_to_message else None,
-                "text": broadcast_text if not message.reply_to_message else None,
-                "status": "pending",
-                "created_at": datetime.now()
-            })
+            await callback_query.answer("Target selected!", show_alert=False)
+            logger.info(f"Admin {callback_query.from_user.id} selected broadcast target: {target}")
             
         except Exception as e:
-            logger.error(f"Error in broadcast: {e}")
-            await message.reply_text("❌ Error preparing broadcast")
+            logger.error(f"Error in broadcast target selection: {e}")
+            await callback_query.answer("❌ Error selecting target!", show_alert=True)
     
     @app.on_message(filters.command("addchannel") & admin_only & filters.private)
     async def add_channel_command(client, message: Message):
@@ -175,6 +295,14 @@ def setup_admin_handlers(app: Client):
                     f"✅ Channel **{chat.title}** added successfully!\n"
                     f"Channel ID: `{chat.id}`"
                 )
+                
+                # Send log
+                await send_force_channel_added_log(
+                    client,
+                    chat.id,
+                    chat.title,
+                    message.from_user.id
+                )
                 logger.info(f"Admin {message.from_user.id} added channel {chat.id}")
                 
             except Exception as e:
@@ -247,6 +375,13 @@ def setup_admin_handlers(app: Client):
             )
             
             await message.reply_text(f"✅ Channel removed successfully!")
+            
+            # Send log
+            await send_force_channel_removed_log(
+                client,
+                channel_id,
+                message.from_user.id
+            )
             logger.info(f"Admin {message.from_user.id} removed channel {channel_id}")
             
         except Exception as e:
@@ -283,6 +418,14 @@ def setup_admin_handlers(app: Client):
             
             status = "Enabled" if enable else "Disabled"
             await message.reply_text(f"✅ Force Subscribe {status} successfully!")
+            
+            # Send log
+            await send_admin_action_log(
+                client,
+                message.from_user.id,
+                "Force Subscribe Updated",
+                f"Force Subscribe {status}"
+            )
             logger.info(f"Admin {message.from_user.id} set force subscribe to {enable}")
             
         except Exception as e:
@@ -319,6 +462,13 @@ def setup_admin_handlers(app: Client):
             )
             
             await message.reply_text(f"✅ Admin added successfully!\nUser ID: `{new_admin_id}`")
+            
+            # Send log
+            await send_admin_added_log(
+                client,
+                new_admin_id,
+                message.from_user.id
+            )
             logger.info(f"Admin {message.from_user.id} added new admin {new_admin_id}")
             
         except ValueError:
@@ -363,6 +513,13 @@ def setup_admin_handlers(app: Client):
             )
             
             await message.reply_text(f"✅ Admin removed successfully!")
+            
+            # Send log
+            await send_admin_removed_log(
+                client,
+                admin_to_remove,
+                message.from_user.id
+            )
             logger.info(f"Admin {message.from_user.id} removed admin {admin_to_remove}")
             
         except ValueError:
@@ -376,9 +533,10 @@ def setup_admin_handlers(app: Client):
         """Show bot settings"""
         try:
             settings = db.settings.find_one({"_id": "main"})
-            force_subscribe = settings.get("force_subscribe", False)
-            force_channels = settings.get("force_channels", [])
-            admins = settings.get("admins", Config.ADMINS)
+            force_subscribe = settings.get("force_subscribe", False) if settings else False
+            force_channels = settings.get("force_channels", []) if settings else []
+            admins = settings.get("admins", Config.ADMINS) if settings else Config.ADMINS
+            broadcast_target = settings.get("broadcast_target", "both") if settings else "both"
             
             settings_text = f"""⚙️ **Bot Settings**
 
@@ -386,6 +544,7 @@ def setup_admin_handlers(app: Client):
 📺 **Force Channels:** {len(force_channels)}
 👨‍💼 **Admins:** {len(admins)}
 📝 **Log Channel:** `{Config.LOG_CHANNEL}`
+📢 **Broadcast Target:** `{broadcast_target}`
 
 **Commands:**
 • `/setforce on/off` - Toggle force subscribe
@@ -393,6 +552,7 @@ def setup_admin_handlers(app: Client):
 • `/removechannel <id>` - Remove channel
 • `/addadmin <id>` - Add admin
 • `/removeadmin <id>` - Remove admin
+• `/setbroadcast users/channels/both` - Set broadcast target
 """
             await message.reply_text(settings_text)
             
@@ -457,29 +617,53 @@ def setup_admin_handlers(app: Client):
                 
                 await callback_query.message.edit_text("📢 Broadcasting... Please wait!")
                 
-                # Get all users
-                users = db.users.find({})
-                total_users = db.users.count_documents({})
+                # Use the selected target from broadcast document
+                broadcast_target = broadcast.get("target")
+                if not broadcast_target:
+                    await callback_query.answer("❌ Please select a target first!", show_alert=True)
+                    return
+                if broadcast_target not in ["users", "channels", "both"]:
+                    broadcast_target = "both"
+                
+                # Get users to broadcast to
+                if broadcast_target == "users":
+                    recipients = db.users.find({})
+                elif broadcast_target == "channels":
+                    recipients = db.chats.find({})
+                else:  # both
+                    users = list(db.users.find({}))
+                    chats = list(db.chats.find({}))
+                    recipients = users + chats
+                
+                if broadcast_target == "users":
+                    total_users = db.users.count_documents({})
+                elif broadcast_target == "channels":
+                    total_users = db.chats.count_documents({})
+                else:  # both
+                    total_users = db.users.count_documents({}) + db.chats.count_documents({})
                 success = 0
                 failed = 0
                 blocked = 0
                 
-                # Broadcast to all users
-                for user in users:
+                # Broadcast to all recipients
+                for recipient in recipients:
                     try:
-                        user_id = user.get("user_id")
+                        if "user_id" in recipient:
+                            recipient_id = recipient.get("user_id")
+                        else:
+                            recipient_id = recipient.get("chat_id")
                         
                         if broadcast.get("message_id"):
                             # Forward the message
                             await client.copy_message(
-                                chat_id=user_id,
+                                chat_id=recipient_id,
                                 from_chat_id=callback_query.from_user.id,
                                 message_id=broadcast["message_id"]
                             )
                         else:
                             # Send text message
                             await client.send_message(
-                                chat_id=user_id,
+                                chat_id=recipient_id,
                                 text=broadcast["text"]
                             )
                         
@@ -502,6 +686,7 @@ def setup_admin_handlers(app: Client):
                             "success": success,
                             "failed": failed,
                             "blocked": blocked,
+                            "target": broadcast_target,
                             "completed_at": datetime.now()
                         }
                     }
@@ -514,11 +699,22 @@ def setup_admin_handlers(app: Client):
 ❌ Failed: {failed:,}
 🚫 Blocked: {blocked:,}
 👥 Total: {total_users:,}
+🎯 Target: **{broadcast_target}**
 
 📅 **Completed:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 """
                 await callback_query.message.edit_text(result_text)
-                logger.info(f"Admin {callback_query.from_user.id} completed broadcast: {success}/{total_users}")
+                
+                # Send log
+                await send_broadcast_log(
+                    client,
+                    callback_query.from_user.id,
+                    total_users,
+                    success,
+                    failed,
+                    blocked
+                )
+                logger.info(f"Admin {callback_query.from_user.id} completed broadcast to {broadcast_target}: {success}/{total_users}")
                 
         except Exception as e:
             logger.error(f"Error in broadcast callback: {e}")

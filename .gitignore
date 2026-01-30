@@ -4,3 +4,6 @@ docs/**
 __pycache__/
 
 .env
+
+giveaway_bot.session
+giveaway_bot.session-journal

@@ -2,9 +2,8 @@ from pyrogram import Client, filters
 from pyrogram.types import Message, CallbackQuery
 from datetime import datetime, timedelta
 from database.models import Giveaway, Settings
-# from services.notification import NotificationService
-from keyboards.inline import join_giveaway_keyboard, close_keyboard, force_subscribe_keyboard
-from utils.helpers import generate_giveaway_id, select_random_winners, parse_time_string, format_time_remaining, get_user_mention
+from utils.inline import join_giveaway_keyboard, force_subscribe_keyboard
+from utils.helpers import generate_giveaway_id, select_random_winners, format_time_remaining, get_user_mention
 from utils.logger import logger
 
 def is_admin_filter(func):
@@ -355,7 +354,7 @@ def setup_giveaway_handlers(app: Client):
             return
         
         # Check force subscribe
-        from services.force_subscribe import ForceSubscribeService
+        from handlers.forcesubscribe import ForceSubscribeService
         force_subscribe_service = ForceSubscribeService(client)
         is_subscribed, not_subscribed = await force_subscribe_service.check_user_subscribed(user_id)
         
@@ -421,7 +420,7 @@ def setup_giveaway_handlers(app: Client):
             return
         
         # Check force subscribe again
-        from services.force_subscribe import ForceSubscribeService
+        from handlers.forcesubscribe import ForceSubscribeService
         force_subscribe_service = ForceSubscribeService(client)
         is_subscribed, not_subscribed = await force_subscribe_service.check_user_subscribed(user_id)
         

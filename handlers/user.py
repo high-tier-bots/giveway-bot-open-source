@@ -1,16 +1,15 @@
 from pyrogram import Client, filters
 from pyrogram.types import Message, CallbackQuery
 from database.models import User, Giveaway, Settings, Chat
-from services.force_subscribe import ForceSubscribeService
-from services.referral import ReferralService
-# from services.notification import NotificationService 
-from keyboards.reply import main_menu_keyboard
+from handlers.forcesubscribe import ForceSubscribeService
+from handlers.referral import ReferralService
+from utils.reply import main_menu_keyboard
 from utils.helpers import get_user_mention, format_time_remaining, format_datetime
 from utils.logger import logger
+from handlers.botlog import send_bot_start_log, send_user_joined_giveaway_log
 
 def setup_user_handlers(app: Client):
     force_subscribe_service = ForceSubscribeService(app)
-    # notification_service = NotificationService(app)
     
     @app.on_message(filters.command("start") & filters.private)
     async def start_command(client: Client, message: Message):
@@ -31,6 +30,8 @@ def setup_user_handlers(app: Client):
         
         if is_new:
             # await notification_service.notify_new_user(user_id, username)
+            # Send log for new user
+            await send_bot_start_log(client, message.from_user)
             logger.info(f"New user started bot: {user_id}")
         
         welcome_text = f"👋 **Welcome {message.from_user.first_name}!**\n\n"
@@ -90,6 +91,14 @@ def setup_user_handlers(app: Client):
         success_text += "🤞 Good luck!"
         
         await message.reply_text(success_text)
+        
+        # Send log for giveaway join
+        await send_user_joined_giveaway_log(
+            client,
+            user_id,
+            message.from_user.username,
+            giveaway["giveaway_id"]
+        )
         logger.info(f"User {user_id} joined giveaway {giveaway['giveaway_id']}")
     
     @app.on_message(filters.command("stats") & filters.private)

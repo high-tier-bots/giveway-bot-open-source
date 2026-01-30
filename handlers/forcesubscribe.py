@@ -2,7 +2,7 @@ from pyrogram import Client
 from pyrogram.types import Message
 from pyrogram.errors import UserNotParticipant, ChatAdminRequired
 from database.models import Settings
-from keyboards.inline import force_subscribe_keyboard
+from utils.inline import force_subscribe_keyboard
 from utils.logger import logger
 
 class ForceSubscribeService:
