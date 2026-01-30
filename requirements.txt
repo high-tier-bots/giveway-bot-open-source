@@ -1,0 +1,5 @@
+pyrogram
+TgCrypto
+pymongo
+python-dotenv
+APScheduler
