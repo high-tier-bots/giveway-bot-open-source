@@ -1,5 +1,6 @@
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.enums import ChatMemberStatus
 from config import Config
 from database.mongo import db
 from utils.logger import logger
@@ -113,14 +114,34 @@ def setup_admin_handlers(app: Client):
                 
                 # Check if bot is admin in the channel
                 bot = await client.get_me()
-                bot_member = await client.get_chat_member(chat.id, bot.id)
-                
-                if bot_member.status not in ["administrator", "creator"]:
-                    await message.reply_text("❌ Bot must be admin in the channel!")
+                try:
+                    bot_member = await client.get_chat_member(chat.id, bot.id)
+                    logger.info(f"Bot status in channel {chat.id}: {bot_member.status}")
+                    
+                    if bot_member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+                        await message.reply_text(
+                            f"❌ Bot must be admin in the channel!\n"
+                            f"Current status: {bot_member.status}\n\n"
+                            f"Please make sure the bot has admin rights in **{chat.title}**"
+                        )
+                        return
+                except Exception as member_error:
+                    logger.error(f"Error checking bot membership: {member_error}")
+                    await message.reply_text(
+                        f"❌ Error checking bot status: {str(member_error)}\n\n"
+                        f"Make sure:\n"
+                        f"1. Bot is added to the channel\n"
+                        f"2. Bot has admin privileges\n"
+                        f"3. Channel username/ID is correct"
+                    )
                     return
                 
                 # Add channel to database
                 settings = db.settings.find_one({"_id": "main"})
+                if settings is None:
+                    db.settings.insert_one({"_id": "main", "force_channels": []})
+                    settings = db.settings.find_one({"_id": "main"})
+                
                 force_channels = settings.get("force_channels", [])
                 
                 if chat.id in force_channels:
@@ -130,7 +151,8 @@ def setup_admin_handlers(app: Client):
                 force_channels.append(chat.id)
                 db.settings.update_one(
                     {"_id": "main"},
-                    {"$set": {"force_channels": force_channels}}
+                    {"$set": {"force_channels": force_channels}},
+                    upsert=True
                 )
                 
                 await message.reply_text(
@@ -140,7 +162,8 @@ def setup_admin_handlers(app: Client):
                 logger.info(f"Admin {message.from_user.id} added channel {chat.id}")
                 
             except Exception as e:
-                await message.reply_text(f"❌ Error: {str(e)}\nMake sure the bot is admin in the channel!")
+                logger.error(f"Error in add channel: {str(e)}")
+                await message.reply_text(f"❌ Error: {str(e)}")
                 
         except Exception as e:
             logger.error(f"Error in add channel: {e}")
@@ -360,5 +383,105 @@ def setup_admin_handlers(app: Client):
         except Exception as e:
             logger.error(f"Error in admins list: {e}")
             await message.reply_text("❌ Error getting admins list")
+    
+    @app.on_callback_query(filters.regex("^broadcast_"))
+    async def handle_broadcast_callback(client, callback_query):
+        """Handle broadcast confirmation callbacks"""
+        try:
+            if not is_admin(callback_query.from_user.id):
+                await callback_query.answer("❌ You are not authorized!", show_alert=True)
+                return
+            
+            action = callback_query.data
+            
+            if action == "broadcast_cancel":
+                # Delete pending broadcast
+                db.broadcasts.delete_many({
+                    "admin_id": callback_query.from_user.id,
+                    "status": "pending"
+                })
+                await callback_query.message.edit_text("❌ Broadcast cancelled!")
+                logger.info(f"Admin {callback_query.from_user.id} cancelled broadcast")
+                return
+            
+            if action == "broadcast_confirm":
+                # Get pending broadcast
+                broadcast = db.broadcasts.find_one({
+                    "admin_id": callback_query.from_user.id,
+                    "status": "pending"
+                })
+                
+                if not broadcast:
+                    await callback_query.answer("❌ No pending broadcast found!", show_alert=True)
+                    return
+                
+                await callback_query.message.edit_text("📢 Broadcasting... Please wait!")
+                
+                # Get all users
+                users = db.users.find({})
+                total_users = db.users.count_documents({})
+                success = 0
+                failed = 0
+                blocked = 0
+                
+                # Broadcast to all users
+                for user in users:
+                    try:
+                        user_id = user.get("user_id")
+                        
+                        if broadcast.get("message_id"):
+                            # Forward the message
+                            await client.copy_message(
+                                chat_id=user_id,
+                                from_chat_id=callback_query.from_user.id,
+                                message_id=broadcast["message_id"]
+                            )
+                        else:
+                            # Send text message
+                            await client.send_message(
+                                chat_id=user_id,
+                                text=broadcast["text"]
+                            )
+                        
+                        success += 1
+                        
+                    except Exception as e:
+                        error_str = str(e).lower()
+                        if "blocked" in error_str or "user is deactivated" in error_str:
+                            blocked += 1
+                        else:
+                            failed += 1
+                        continue
+                
+                # Update broadcast status
+                db.broadcasts.update_one(
+                    {"_id": broadcast["_id"]},
+                    {
+                        "$set": {
+                            "status": "completed",
+                            "success": success,
+                            "failed": failed,
+                            "blocked": blocked,
+                            "completed_at": datetime.now()
+                        }
+                    }
+                )
+                
+                result_text = f"""✅ **Broadcast Completed!**
+
+📊 **Results:**
+✅ Success: {success:,}
+❌ Failed: {failed:,}
+🚫 Blocked: {blocked:,}
+👥 Total: {total_users:,}
+
+📅 **Completed:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+"""
+                await callback_query.message.edit_text(result_text)
+                logger.info(f"Admin {callback_query.from_user.id} completed broadcast: {success}/{total_users}")
+                
+        except Exception as e:
+            logger.error(f"Error in broadcast callback: {e}")
+            await callback_query.message.edit_text(f"❌ Error during broadcast: {str(e)}")
     
     logger.info("Admin handlers setup complete")
