@@ -144,11 +144,27 @@ def setup_admin_handlers(app: Client):
                 
                 force_channels = settings.get("force_channels", [])
                 
-                if chat.id in force_channels:
+                # Check if channel already exists
+                channel_exists = False
+                for fc in force_channels:
+                    if isinstance(fc, dict) and fc.get("id") == chat.id:
+                        channel_exists = True
+                        break
+                    elif isinstance(fc, int) and fc == chat.id:
+                        channel_exists = True
+                        break
+                
+                if channel_exists:
                     await message.reply_text(f"ℹ️ Channel **{chat.title}** is already in the list!")
                     return
                 
-                force_channels.append(chat.id)
+                # Add channel as dictionary with id and username
+                channel_data = {
+                    "id": chat.id,
+                    "username": f"@{chat.username}" if chat.username else None,
+                    "title": chat.title
+                }
+                force_channels.append(channel_data)
                 db.settings.update_one(
                     {"_id": "main"},
                     {"$set": {"force_channels": force_channels}},
@@ -174,7 +190,7 @@ def setup_admin_handlers(app: Client):
         """Remove force subscribe channel"""
         try:
             settings = db.settings.find_one({"_id": "main"})
-            force_channels = settings.get("force_channels", [])
+            force_channels = settings.get("force_channels", []) if settings else []
             
             if not force_channels:
                 await message.reply_text("ℹ️ No channels in the list!")
@@ -183,27 +199,51 @@ def setup_admin_handlers(app: Client):
             if len(message.command) < 2:
                 # Show list of channels
                 channel_list = "📋 **Force Subscribe Channels:**\n\n"
-                for idx, channel_id in enumerate(force_channels, 1):
+                for idx, channel in enumerate(force_channels, 1):
                     try:
-                        chat = await client.get_chat(channel_id)
-                        channel_list += f"{idx}. {chat.title} (`{channel_id}`)\n"
+                        if isinstance(channel, dict):
+                            channel_id = channel.get("id")
+                            channel_title = channel.get("title", "Unknown")
+                            channel_list += f"{idx}. {channel_title} (`{channel_id}`)\n"
+                        else:
+                            # Old format (integer)
+                            chat = await client.get_chat(channel)
+                            channel_list += f"{idx}. {chat.title} (`{channel}`)\n"
                     except:
+                        channel_id = channel.get("id") if isinstance(channel, dict) else channel
                         channel_list += f"{idx}. Unknown (`{channel_id}`)\n"
                 
-                channel_list += f"\n**Usage:** `/removechannel {force_channels[0]}`"
+                first_channel_id = force_channels[0].get("id") if isinstance(force_channels[0], dict) else force_channels[0]
+                channel_list += f"\n**Usage:** `/removechannel {first_channel_id}`"
                 await message.reply_text(channel_list)
                 return
             
             channel_id = int(message.command[1])
             
-            if channel_id not in force_channels:
+            # Check if channel exists in list
+            channel_found = False
+            updated_channels = []
+            
+            for channel in force_channels:
+                if isinstance(channel, dict):
+                    if channel.get("id") != channel_id:
+                        updated_channels.append(channel)
+                    else:
+                        channel_found = True
+                else:
+                    # Old format (integer)
+                    if channel != channel_id:
+                        updated_channels.append(channel)
+                    else:
+                        channel_found = True
+            
+            if not channel_found:
                 await message.reply_text("❌ Channel not in the list!")
                 return
             
-            force_channels.remove(channel_id)
             db.settings.update_one(
                 {"_id": "main"},
-                {"$set": {"force_channels": force_channels}}
+                {"$set": {"force_channels": updated_channels}}
             )
             
             await message.reply_text(f"✅ Channel removed successfully!")

@@ -5,7 +5,7 @@ from pyrogram.enums import ParseMode
 from database.mongo import db
 from handlers.user import setup_user_handlers
 from handlers.admin import setup_admin_handlers
-# from handlers.giveaway import setup_giveaway_handlers
+from handlers.giveaway import setup_giveaway_handlers
 # from handlers.broadcast import setup_broadcast_handlers
 # from services.notification import NotificationService
 from config import Config
@@ -26,7 +26,7 @@ class GiveawayBot:
         # Setup handlers
         setup_user_handlers(self.app)
         setup_admin_handlers(self.app)
-        # setup_giveaway_handlers(self.app)
+        setup_giveaway_handlers(self.app)
         # setup_broadcast_handlers(self.app)
         # self.setup_system_handlers()
         
@@ -104,7 +104,8 @@ class GiveawayBot:
             BotCommand("participants", "View participants"),
             BotCommand("addadmin", "Add new admin"),
             BotCommand("removeadmin", "Remove admin"),
-            BotCommand("settings", "Bot settings")
+            BotCommand("settings", "Bot settings"),
+            BotCommand("admins", "View admin list")
         ]
         
         # Set default commands for all users

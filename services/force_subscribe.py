@@ -24,7 +24,13 @@ class ForceSubscribeService:
         not_subscribed = []
         
         for channel in force_channels:
-            channel_id = channel.get("id")
+            # Handle both old format (int) and new format (dict)
+            if isinstance(channel, dict):
+                channel_id = channel.get("id")
+            else:
+                # Old format - just an integer
+                channel_id = channel
+                
             try:
                 member = await self.app.get_chat_member(channel_id, user_id)
                 if member.status in ["left", "kicked"]:

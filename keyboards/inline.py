@@ -10,9 +10,21 @@ def force_subscribe_keyboard(channels):
     """Force subscribe channels keyboard"""
     buttons = []
     for channel in channels:
-        username = channel.get("username", "")
+        # Handle both old format (int) and new format (dict)
+        if isinstance(channel, dict):
+            username = channel.get("username", "")
+            title = channel.get("title", "Channel")
+            channel_id = channel.get("id")
+        else:
+            # Old format - just an integer, can't create proper button
+            username = None
+            channel_id = channel
+            title = "Channel"
+        
         if username:
-            buttons.append([InlineKeyboardButton(f"📢 Join {username}", url=f"https://t.me/{username}")])
+            # Remove @ if present
+            username_clean = username.lstrip('@')
+            buttons.append([InlineKeyboardButton(f"📢 Join {title}", url=f"https://t.me/{username_clean}")])
     
     buttons.append([InlineKeyboardButton("✅ Try Again", callback_data="check_subscription")])
     return InlineKeyboardMarkup(buttons)
