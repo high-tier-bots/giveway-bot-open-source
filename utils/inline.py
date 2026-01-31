@@ -96,3 +96,16 @@ def close_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("❌ Close", callback_data="close")]
     ])
+
+def end_giveaway_keyboard(giveaway_id):
+    """End giveaway options keyboard"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Auto Announce", callback_data=f"end_auto_announce_{giveaway_id}")],
+        [InlineKeyboardButton("⏳ Manual Announce", callback_data=f"end_manual_announce_{giveaway_id}")]
+    ])
+
+def announce_winner_keyboard(giveaway_id):
+    """Announce winner button"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 Announce Winners", callback_data=f"announce_winner_{giveaway_id}")]
+    ])

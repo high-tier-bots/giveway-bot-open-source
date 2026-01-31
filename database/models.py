@@ -1,5 +1,6 @@
 from datetime import datetime
 from database.mongo import db
+from utils.logger import logger
 
 class User:
     @staticmethod
@@ -83,13 +84,34 @@ class Giveaway:
     @staticmethod
     def end_giveaway(giveaway_id, winners=None):
         """End a giveaway"""
-        update_data = {"status": "ended"}
-        if winners:
-            update_data["winners"] = winners
-        db.giveaways.update_one(
-            {"giveaway_id": giveaway_id},
-            {"$set": update_data}
-        )
+        try:
+            update_data = {"status": "ended"}
+            if winners:
+                update_data["winners"] = winners
+            
+            logger.info(f"[DB_END_GIVEAWAY] Ending giveaway {giveaway_id}, winners: {len(winners) if winners else 0}")
+            db.giveaways.update_one(
+                {"giveaway_id": giveaway_id},
+                {"$set": update_data}
+            )
+            logger.info(f"[DB_END_GIVEAWAY] ✅ Successfully ended giveaway {giveaway_id}")
+        except Exception as e:
+            logger.error(f"[DB_END_GIVEAWAY] Error ending giveaway {giveaway_id}: {str(e)}", exc_info=True)
+            raise
+    
+    @staticmethod
+    def update_giveaway_status(giveaway_id, status):
+        """Update giveaway status"""
+        try:
+            logger.info(f"[DB_UPDATE_STATUS] Updating giveaway {giveaway_id} status to {status}")
+            db.giveaways.update_one(
+                {"giveaway_id": giveaway_id},
+                {"$set": {"status": status}}
+            )
+            logger.info(f"[DB_UPDATE_STATUS] ✅ Successfully updated status for {giveaway_id}")
+        except Exception as e:
+            logger.error(f"[DB_UPDATE_STATUS] Error updating status for {giveaway_id}: {str(e)}", exc_info=True)
+            raise
     
     @staticmethod
     def get_participants_count(giveaway_id):
